@@ -12,3 +12,7 @@ Thumbs.db
 .vscode/
 
 # Permitir que se agreguen todos los demás archivos
+
+Lib/
+Scripts/
+
