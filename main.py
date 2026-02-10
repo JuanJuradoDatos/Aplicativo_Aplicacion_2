@@ -1,160 +1,124 @@
-#Import All the Required Libraries
-import cv2
+# -----------------------------
+# Imports
+# -----------------------------
 import streamlit as st
 from pathlib import Path
-import sys
 from ultralytics import YOLO
 from PIL import Image
+import numpy as np
 
-#Get the absolute path of the current file
-FILE = Path(__file__).resolve()
+# -----------------------------
+# Paths (robustos en cloud)
+# -----------------------------
+ROOT = Path(__file__).resolve().parent
 
-#Get the parent directory of the current file
-ROOT = FILE.parent
+IMAGES_DIR = ROOT / "images"
+MODEL_DIR  = ROOT / "weights"
 
-#Add the root path to the sys.path list
-if ROOT not in sys.path:
-    sys.path.append(str(ROOT))
+DEFAULT_IMAGE = IMAGES_DIR / "malignant (94).png"
+DEFAULT_DETECT_IMAGE = IMAGES_DIR / "malignant (94)_0.png"
 
-#Get the relative path of the root directory with respect to the current working directory
-ROOT = ROOT.relative_to(Path.cwd())
+DETECTION_MODEL = MODEL_DIR / "modelo_guardado.pt"
 
-#Sources
-IMAGE = 'Image'
-VIDEO = 'Video'
+# -----------------------------
+# Streamlit config
+# -----------------------------
+st.set_page_config(page_title="Breast cancer detection (YOLO)", page_icon="𝑓(𝑥)", layout="wide")
+st.header("Breast cancer detection app — Juan David Jurado Tapias")
 
-SOURCES_LIST = [IMAGE, VIDEO]
-
-#Image Config
-IMAGES_DIR = ROOT/'images'
-DEFAULT_IMAGE = IMAGES_DIR/'malignant (94).png'
-DEFAULT_DETECT_IMAGE = IMAGES_DIR/'malignant (94)_0.png'
-
-#Videos Config
-VIDEO_DIR = ROOT/'videos'
-VIDEOS_DICT = {
-    'video 1': VIDEO_DIR/'video1.mp4',
-    'video 2': VIDEO_DIR/'video2.mp4'
-}
-
-#Model Configurations
-MODEL_DIR = ROOT/'weights'
-DETECTION_MODEL = MODEL_DIR/'modelo_guardado.pt'
-
-#In case of your custom model
-#DETECTION_MODEL = MODEL_DIR/'custom_model_weight.pt'
-
-SEGMENTATION_MODEL  = MODEL_DIR/'yolo11n-seg.pt'
-
-POSE_ESTIMATION_MODEL = MODEL_DIR/'yolo11n-pose.pt'
-
-#Page Layout
-st.set_page_config(
-    page_title = "YOLO11",
-    page_icon = "𝑓(𝑥)"
-)
-
-#Header
-st.header("Detección de Cancer de mama Autor: Juan David Jurado Tapias")
-
-#SideBar
-st.sidebar.header("Model Configurations")
-
-#Choose Model: Detection, Segmentation or Pose Estimation
-model_type = st.sidebar.radio("Task", ["Detection", "Segmentation", "Pose Estimation"])
-
-#Select Confidence Value
-confidence_value = float(st.sidebar.slider("Select Model Confidence Value", 0, 100, 40))/100
-
-#Selecting Detection, Segmentation, Pose Estimation Model
-if model_type == 'Detection':
-    model_path = Path(DETECTION_MODEL)
-elif model_type == 'Segmentation':
-    model_path = Path(SEGMENTATION_MODEL)
-elif model_type ==  'Pose Estimation':
-    model_path = Path(POSE_ESTIMATION_MODEL)
-
-#Load the YOLO Model
-try:
+# -----------------------------
+# Cache del modelo (CLAVE para RAM)
+# -----------------------------
+@st.cache_resource(show_spinner=True)
+def load_model(model_path: str):
+    # Forzamos CPU para estabilidad en cloud free
     model = YOLO(model_path)
-except Exception as e:
-    st.error(f"Unable to load model. Check the sepcified path: {model_path}")
-    st.error(e)
+    return model
 
-#Image / Video Configuration
-st.sidebar.header("Image/Video Config")
-source_radio = st.sidebar.radio(
-    "Select Source", SOURCES_LIST
-)
+# -----------------------------
+# Sidebar
+# -----------------------------
+st.sidebar.header("Configuración")
 
-source_image = None
-if source_radio == IMAGE:
-    source_image = st.sidebar.file_uploader(
-        "Choose an Image....", type = ("jpg", "png", "jpeg", "bmp", "webp")
-    )
-    col1, col2 = st.columns(2)
-    with col1:
+confidence_value = st.sidebar.slider("Confianza", 0.05, 0.95, 0.40, 0.05)
+
+# (RECOMENDADO) Deja solo Detection en producción
+model_path = DETECTION_MODEL
+
+if not model_path.exists():
+    st.error(f"No encuentro el modelo en: {model_path}")
+    st.stop()
+
+# Carga 1 vez por sesión (gracias al cache)
+model = load_model(str(model_path))
+
+st.sidebar.success("Modelo cargado ✅ (cacheado)")
+
+# -----------------------------
+# Fuente: Imagen
+# -----------------------------
+st.sidebar.header("Entrada")
+source_image = st.sidebar.file_uploader("Sube una imagen", type=("jpg", "png", "jpeg", "bmp", "webp"))
+
+col1, col2 = st.columns(2)
+
+with col1:
+    try:
+        if source_image is None:
+            img = Image.open(DEFAULT_IMAGE).convert("RGB")
+            st.image(img, caption="Imagen por defecto", use_container_width=True)
+        else:
+            img = Image.open(source_image).convert("RGB")
+            st.image(img, caption="Imagen subida", use_container_width=True)
+    except Exception as e:
+        st.error("Error abriendo la imagen")
+        st.exception(e)
+        st.stop()
+
+with col2:
+    if source_image is None:
         try:
-            if source_image is None:
-                default_image_path = str(DEFAULT_IMAGE)
-                default_image = Image.open(default_image_path)
-                st.image(default_image_path, caption = "Default Image", use_column_width=True)
-            else:
-                uploaded_image  =Image.open(source_image)
-                st.image(source_image, caption = "Uploaded Image", use_column_width = True)
-        except Exception as e:
-            st.error("Error Occured While Opening the Image")
-            st.error(e)
-    with col2:
-        try:
-            if source_image is None:
-                default_detected_image_path = str(DEFAULT_DETECT_IMAGE)
-                default_detected_image = Image.open(default_detected_image_path)
-                st.image(default_detected_image_path, caption = "Detected Image", use_column_width = True)
-            else:
-                if st.sidebar.button("Detect Objects"):
-                    result = model.predict(uploaded_image, conf = confidence_value)
-                    boxes = result[0].boxes
-                    result_plotted = result[0].plot()[:,:,::-1]
-                    st.image(result_plotted, caption = "Detected Image", use_column_width = True)
+            st.image(Image.open(DEFAULT_DETECT_IMAGE), caption="Ejemplo detectado", use_container_width=True)
+        except Exception:
+            st.info("No hay ejemplo detectado disponible.")
+    else:
+        # Botón evita reruns de inferencia por cada cambio
+        if st.sidebar.button("Detectar", type="primary"):
+            # 1) convertir a numpy y reducir tamaño para ahorrar RAM
+            img_np = np.array(img)
 
-                    try:
-                        with st.expander("Detection Results"):
-                            for box in boxes:
-                                st.write(box.data)
-                    except Exception as e:
-                        st.error(e)
-        except Exception as e:
-            st.error("Error Occured While Opening the Image")
-            st.error(e)
+            # Reducción simple: limita a 640 px en lado mayor
+            h, w = img_np.shape[:2]
+            max_side = max(h, w)
+            if max_side > 640:
+                scale = 640 / max_side
+                new_w, new_h = int(w * scale), int(h * scale)
+                # PIL resize (más liviano que cv2 aquí)
+                img_small = img.resize((new_w, new_h))
+                img_np = np.array(img_small)
 
-elif source_radio == VIDEO:
-    source_video = st.sidebar.selectbox(
-        "Choose a Video...", VIDEOS_DICT.keys()
-    )
-    with open(VIDEOS_DICT.get(source_video), 'rb') as video_file:
-        video_bytes = video_file.read()
-        if video_bytes:
-            st.video(video_bytes)
-        if st.sidebar.button("Detect Video Objects"):
-            try:
-                video_cap = cv2.VideoCapture(
-                    str(VIDEOS_DICT.get(source_video))
+            with st.spinner("Ejecutando detección..."):
+                # 2) predict en CPU y sin streaming extra
+                results = model.predict(
+                    source=img_np,
+                    conf=float(confidence_value),
+                    device="cpu",
+                    verbose=False
                 )
-                st_frame = st.empty()
-                while (video_cap.isOpened()):
-                    success, image = video_cap.read()
-                    if success:
-                        image = cv2.resize(image, (720, int(720 * (9/16))))
-                        #Predict the objects in the image using YOLO11
-                        result = model.predict(image, conf = confidence_value)
-                        #Plot the detected objects on the video frame
-                        result_plotted = result[0].plot()
-                        st_frame.image(result_plotted, caption = "Detected Video",
-                                       channels = "BGR",
-                                       use_column_width=True)
-                    else:
-                        video_cap.release()
-                        break
-            except Exception as e:
-                st.sidebar.error("Error Loading Video"+str(e))
+
+            # 3) Plot (esto crea un array) → convertir a RGB si viene en BGR
+            plotted = results[0].plot()
+            # Ultralytics suele devolver BGR
+            plotted = plotted[..., ::-1]
+
+            st.image(plotted, caption="Resultado", use_container_width=True)
+
+            # Resultados en expander (ligero)
+            with st.expander("Resultados (boxes)"):
+                boxes = results[0].boxes
+                if boxes is None or len(boxes) == 0:
+                    st.write("No se detectaron objetos.")
+                else:
+                    # Mostrar de forma compacta
+                    for b in boxes:
+                        st.write(b.data.cpu().numpy())
